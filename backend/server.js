@@ -90,6 +90,24 @@ app.get('/api/13f/:entity', async (req, res) => {
   }
 });
 
+// Last-year rate of return (based on 13F portfolio value change)
+app.get('/api/13f/:entity/return', async (req, res) => {
+  try {
+    const entity = req.params.entity;
+    const data = await sec13fService.get13FYearOverYearReturn(entity);
+    if (data.error && !data.returnPercent) {
+      return res.status(400).json(data);
+    }
+    res.json(data);
+  } catch (error) {
+    console.error(`Error in /api/13f/${req.params.entity}/return:`, error);
+    res.status(500).json({
+      error: 'Failed to compute year-over-year return',
+      message: error.message
+    });
+  }
+});
+
 // Market Data Routes
 const marketService = require('./services/marketService');
 

@@ -51,7 +51,7 @@ async function fetch13FHoldings(accessionNumber, cik) {
     const cachedData = await dbService.getCachedHoldings(accessionNumber);
     if (cachedData) {
       console.log(`Returning cached holdings for ${accessionNumber}`);
-      return cachedData;
+      return applyAggregationToResult(cachedData);
     }
 
     const headers = {
@@ -174,8 +174,9 @@ async function fetch13FHoldings(accessionNumber, cik) {
     const result = await parser.parseStringPromise(response.data);
 
     // Extract holdings from the parsed XML structure
-    // The structure varies, but typically: infoTable -> infoTable -> holding
-    const holdings = extractHoldings(result);
+    const rawHoldings = extractHoldings(result);
+    // Aggregate by issuer so same issuer (e.g. multiple share classes) appears once — avoids duplicate rows in Top 5 / table
+    const holdings = aggregateHoldingsByIssuer(rawHoldings);
 
     // Separate cash/equivalents from investments
     const cashHoldings = holdings.filter(h =>
@@ -196,7 +197,8 @@ async function fetch13FHoldings(accessionNumber, cik) {
     const holdingsWithPercentages = holdings.map(holding => ({
       ...holding,
       percentage: totalValue > 0 ? ((parseFloat(holding.value) || 0) / totalValue * 100) : 0,
-      isCash: cashHoldings.includes(holding)
+      isCash: cashHoldings.includes(holding),
+      ticker: getTickerFromCusip(holding.cusip) || undefined
     }));
 
     const resultData = {
@@ -287,6 +289,126 @@ function extractHoldings(xmlData) {
   }
 
   return holdings;
+}
+
+/**
+ * Normalize issuer name for aggregation: strip share-class suffixes and variants so
+ * "ALPHABET INC CL A", "ALPHABET INC CL C", "ALPHABET INC." all map to the same key.
+ */
+function normalizeIssuerKey(name) {
+  if (!name || typeof name !== 'string') return 'UNKNOWN';
+  let s = name.trim().toUpperCase();
+  s = s.replace(/\s+/g, ' ').replace(/\.+$/, ''); // collapse spaces, remove trailing period
+  // Strip share-class suffixes (CL A, CLASS A, CL B, etc.) and optional trailing COMMON/COM
+  const classPatterns = [
+    /\s+CL\s+[A-Z]\s+(?:COMMON|COM|CAPITAL\s*STOCK?)?\s*$/i,
+    /\s+CLASS\s+[A-Z]\s*(?:COMMON|COM|CAPITAL\s*STOCK?)?\s*$/i,
+    /\s+SERIES\s+[A-Z]\s*$/i,
+    /\s+-\s*CL\s+[A-Z]\s*$/i,
+    /\s+-\s*CLASS\s+[A-Z]\s*$/i,
+    /\s+CLASS\s+[A-Z]\s+CAPITAL\s*$/i,
+    /\s+CL\s+[A-Z]\s*$/i,
+    /\s+CLASS\s+[A-Z]\s*$/i,
+  ];
+  for (const p of classPatterns) {
+    s = s.replace(p, '');
+  }
+  return s.trim() || 'UNKNOWN';
+}
+
+/**
+ * Aggregate holdings by issuer so the same issuer (e.g. Class A, B, C) appears once with combined value.
+ * Uses normalized issuer name (stripping share-class suffixes) so "ALPHABET INC CL A" and "ALPHABET INC CL C" merge.
+ */
+function aggregateHoldingsByIssuer(holdings) {
+  if (!holdings || holdings.length === 0) return holdings;
+
+  const byIssuer = new Map();
+
+  holdings.forEach(h => {
+    const rawName = (h.nameOfIssuer || 'Unknown').trim();
+    const key = normalizeIssuerKey(rawName);
+    const value = parseFloat(h.value) || 0;
+    const shares = parseFloat(h.shares) || 0;
+
+    if (!byIssuer.has(key)) {
+      byIssuer.set(key, {
+        nameOfIssuer: rawName,
+        titleOfClass: h.titleOfClass || '',
+        cusip: h.cusip || '',
+        value: 0,
+        shares: 0,
+        putCall: h.putCall || '',
+        investmentDiscretion: h.investmentDiscretion || ''
+      });
+    }
+    const entry = byIssuer.get(key);
+    entry.value += value;
+    entry.shares += shares;
+    if (value > (entry._maxValue || 0)) {
+      entry._maxValue = value;
+      entry.cusip = h.cusip || entry.cusip;
+      entry.titleOfClass = h.titleOfClass || entry.titleOfClass;
+    }
+    // Prefer shorter display name (usually base name without " CL A" etc.)
+    if (rawName.length < entry.nameOfIssuer.length) {
+      entry.nameOfIssuer = rawName;
+    }
+  });
+
+  return Array.from(byIssuer.values()).map(e => {
+    delete e._maxValue;
+    return e;
+  });
+}
+
+/**
+ * Apply aggregation to a result object (e.g. from cache) so duplicates are always merged.
+ * Recomputes totalValue, cash, and percentages after aggregating holdings by issuer.
+ */
+function applyAggregationToResult(resultData) {
+  if (!resultData || !resultData.holdings || resultData.holdings.length === 0) {
+    return resultData;
+  }
+  const rawHoldings = resultData.holdings.map(h => ({
+    nameOfIssuer: h.nameOfIssuer,
+    titleOfClass: h.titleOfClass,
+    cusip: h.cusip,
+    value: h.value,
+    shares: h.shares,
+    putCall: h.putCall,
+    investmentDiscretion: h.investmentDiscretion
+  }));
+  const aggregated = aggregateHoldingsByIssuer(rawHoldings);
+
+  const cashHoldings = aggregated.filter(h =>
+    h.nameOfIssuer && (
+      String(h.nameOfIssuer).toLowerCase().includes('cash') ||
+      String(h.nameOfIssuer).toLowerCase().includes('treasury') ||
+      (h.titleOfClass && String(h.titleOfClass).toLowerCase().includes('cash'))
+    )
+  );
+  const totalValue = aggregated.reduce((sum, h) => sum + (parseFloat(h.value) || 0), 0);
+  const cashValue = cashHoldings.reduce((sum, h) => sum + (parseFloat(h.value) || 0), 0);
+  const investmentValue = totalValue - cashValue;
+
+  const holdingsWithPercentages = aggregated.map(holding => ({
+    ...holding,
+    percentage: totalValue > 0 ? ((parseFloat(holding.value) || 0) / totalValue * 100) : 0,
+    isCash: cashHoldings.includes(holding),
+    ticker: getTickerFromCusip(holding.cusip) || undefined
+  }));
+
+  return {
+    ...resultData,
+    holdings: holdingsWithPercentages.sort((a, b) => parseFloat(b.value) - parseFloat(a.value)),
+    totalValue,
+    totalHoldings: holdingsWithPercentages.length,
+    cashValue,
+    investmentValue,
+    cashPercentage: totalValue > 0 ? (cashValue / totalValue * 100) : 0,
+    investmentPercentage: totalValue > 0 ? (investmentValue / totalValue * 100) : 0
+  };
 }
 
 /**

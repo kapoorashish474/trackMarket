@@ -1,80 +1,67 @@
 import React from 'react';
 
-function TimelineView({ data, selectedFiling, onFilingClick, formatDate, selectedQuarter }) {
+function TimelineView({ data, selectedFiling, onFilingClick, formatDate, selectedQuarter, filingsWithNoHoldings = new Set() }) {
     if (!data || !data.timeline) return null;
 
+    // Flatten all filings into a single list (newest first)
+    const allFilings = [];
     const years = Object.keys(data.timeline)
         .map(y => parseInt(y))
         .sort((a, b) => b - a);
 
+    years.forEach(year => {
+        const yearData = data.timeline[year];
+        let quarters = Object.keys(yearData.quarters).sort().reverse();
+        if (selectedQuarter && selectedQuarter !== 'all') {
+            quarters = quarters.filter(q => q === selectedQuarter);
+        }
+        quarters.forEach(quarter => {
+            yearData.quarters[quarter].forEach(filing => {
+                allFilings.push({ ...filing, year, quarter });
+            });
+        });
+    });
+
     return (
         <div className="timeline">
-            <div className="timeline-stats">
-                <div className="stat">
-                    <span className="stat-label">Total Filings:</span>
-                    <span className="stat-value">{data.totalFilings}</span>
-                </div>
-                <div className="stat">
-                    <span className="stat-label">Company:</span>
-                    <span className="stat-value">{data.companyName}</span>
-                </div>
-            </div>
-
-            <div className="years-container">
-                {years.map(year => {
-                    const yearData = data.timeline[year];
-                    let quarters = Object.keys(yearData.quarters).sort().reverse();
-
-                    // Filter quarters if a specific one is selected
-                    if (selectedQuarter && selectedQuarter !== 'all') {
-                        quarters = quarters.filter(q => q === selectedQuarter);
-                    }
-
-                    // If no quarters match (shouldn't happen for the selected year usually), don't render year block
-                    if (quarters.length === 0) return null;
-
-                    return (
-                        <div key={year} className="year-block">
-                            <div className="year-header">
-                                <h4 className="year-title">{year}</h4>
-                                <span className="year-count">{yearData.totalFilings} filing{yearData.totalFilings !== 1 ? 's' : ''}</span>
-                            </div>
-                            <div className="quarters-container">
-                                {quarters.map(quarter => {
-                                    const quarterFilings = yearData.quarters[quarter];
-                                    return (
-                                        <div key={quarter} className="quarter-block">
-                                            <div className="quarter-header">{quarter}</div>
-                                            <div className="filings-list">
-                                                {quarterFilings.map((filing, idx) => (
-                                                    <div
-                                                        key={`${filing.accessionNumber}-${idx}`}
-                                                        className={`filing-item ${selectedFiling?.accessionNumber === filing.accessionNumber ? 'selected' : ''}`}
-                                                        onClick={() => onFilingClick(filing)}
-                                                        style={{ cursor: 'pointer' }}
-                                                    >
-                                                        <div className="filing-header">
-                                                            <div className="filing-type">{filing.formType}</div>
-                                                            <div className="filing-click-hint">Click here to view holdings →</div>
-                                                        </div>
-                                                        <div className="filing-date">
-                                                            Filed: {formatDate(filing.filingDate)}
-                                                        </div>
-                                                        {filing.reportDate !== filing.filingDate && (
-                                                            <div className="filing-date">
-                                                                Report: {formatDate(filing.reportDate)}
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    );
-                })}
+            <div className="timeline-table-wrap">
+                <table className="timeline-table">
+                    <thead>
+                        <tr>
+                            <th>Year</th>
+                            <th>Quarter</th>
+                            <th>Type</th>
+                            <th>Filed</th>
+                            <th>Report</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {allFilings.map((filing, idx) => {
+                            const hasNoHoldings = filingsWithNoHoldings.has(filing.accessionNumber);
+                            return (
+                                <tr
+                                    key={`${filing.accessionNumber}-${idx}`}
+                                    className={`filing-row ${selectedFiling?.accessionNumber === filing.accessionNumber ? 'selected' : ''} ${hasNoHoldings ? 'no-holdings' : ''}`}
+                                    onClick={hasNoHoldings ? undefined : () => onFilingClick(filing)}
+                                >
+                                    <td>{filing.year}</td>
+                                    <td>{filing.quarter}</td>
+                                    <td>{filing.formType}</td>
+                                    <td>{formatDate(filing.filingDate)}</td>
+                                    <td>{formatDate(filing.reportDate)}</td>
+                                    <td>
+                                        {hasNoHoldings ? (
+                                            <span className="filing-action disabled">No data</span>
+                                        ) : (
+                                            <span className="filing-action">View Holdings →</span>
+                                        )}
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
             </div>
         </div>
     );

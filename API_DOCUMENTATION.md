@@ -5,18 +5,22 @@ This application provides access to 13F filing data from the SEC EDGAR database 
 
 ## Entities Tracked
 - **Berkshire Hathaway Inc.** (Warren Buffett) - CIK: 0001067983
-- **Scion Asset Management** - CIK: 0001577557
+- **Dalal Street LLC** (Mohnish Pabrai) - CIK: 0001549575
+- **Pershing Square** (Bill Ackman) - CIK: 0001336528
+- **Duquesne Family Office LLC** (Stanley Druckenmiller) - CIK: 0001536411
+- **Cantor Fitzgerald, L.P.** (Howard Lutnick) - CIK: 0001024896
+Filings are limited to **13F-HR** and **13F-HR/A** only. For each report period (year/quarter), only the latest filing is shown (amendments supersede originals).
 
 ## API Endpoints
 
 ### Get All 13F Timeline Data
 ```
-GET /api/13f/timeline?years=10
+GET /api/13f/timeline?years=5
 ```
-Returns timeline data for both Berkshire Hathaway and Scion Asset Management.
+Returns timeline data for Berkshire Hathaway.
 
 **Query Parameters:**
-- `years` (optional): Number of years to look back (default: 10, options: 5, 10, 15)
+- `years` (optional): Number of years to look back (default: 5)
 
 **Response:**
 ```json
@@ -24,9 +28,9 @@ Returns timeline data for both Berkshire Hathaway and Scion Asset Management.
   "berkshire": {
     "entity": "berkshire",
     "cik": "0001067983",
-    "companyName": "Berkshire Hathaway Inc.",
+    "companyName": "Berkshire Hathaway Inc. (Warren Buffett)",
     "totalFilings": 40,
-    "years": 10,
+    "years": 5,
     "filings": [...],
     "timeline": {
       "2024": {
@@ -39,24 +43,29 @@ Returns timeline data for both Berkshire Hathaway and Scion Asset Management.
       }
     }
   },
-  "scion": {
-    ...
-  },
   "generatedAt": "2024-12-26T..."
 }
 ```
 
-### Get Berkshire Hathaway 13F Data
+### Get Entity 13F Data
 ```
-GET /api/13f/berkshire?years=10
+GET /api/13f/berkshire?year=2025
+GET /api/13f/dalalstreet?year=2025
+GET /api/13f/pershing?year=2025
+GET /api/13f/duquesne?year=2025
+GET /api/13f/cantorfitzgerald?year=2025
 ```
-Returns timeline data for Berkshire Hathaway only.
+Returns timeline data for the given entity and optional year.
 
-### Get Scion Asset Management 13F Data
+### Get Last-Year Rate of Return
 ```
-GET /api/13f/scion?years=10
+GET /api/13f/berkshire/return
+GET /api/13f/dalalstreet/return
+GET /api/13f/pershing/return
+GET /api/13f/duquesne/return
+GET /api/13f/cantorfitzgerald/return
 ```
-Returns timeline data for Scion Asset Management only.
+Returns the year-over-year change in 13F reported portfolio value (prior period vs. latest filing). Response includes `returnPercent`, `latestValue`, `priorValue`, `latestReportDate`, `priorReportDate`. Not the same as fund performance; based only on reported holdings values.
 
 ## Data Source
 Data is fetched from the SEC EDGAR database (https://data.sec.gov) using their public API. The SEC requires a User-Agent header for all requests.
@@ -71,24 +80,21 @@ Navigate to the "13F Timeline" tab in the application to view the interactive ti
 
 ### Using curl
 ```bash
-# Get all entities (last 10 years)
-curl http://localhost:5000/api/13f/timeline?years=10
+# Get all entities (last 5 years)
+curl http://localhost:5000/api/13f/timeline?years=5
 
 # Get Berkshire only (last 5 years)
 curl http://localhost:5000/api/13f/berkshire?years=5
-
-# Get Scion only (last 15 years)
-curl http://localhost:5000/api/13f/scion?years=15
 ```
 
 ### Using JavaScript
 ```javascript
 // Fetch all entities
-const response = await fetch('/api/13f/timeline?years=10');
+const response = await fetch('/api/13f/timeline?years=5');
 const data = await response.json();
 
 // Fetch Berkshire only
-const berkshireResponse = await fetch('/api/13f/berkshire?years=10');
+const berkshireResponse = await fetch('/api/13f/berkshire?years=5');
 const berkshireData = await berkshireResponse.json();
 ```
 

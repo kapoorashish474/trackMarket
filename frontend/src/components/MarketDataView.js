@@ -5,6 +5,7 @@ function MarketDataView({ type, title, icon }) {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [tableMinimized, setTableMinimized] = useState(false);
 
     useEffect(() => {
         fetchData();
@@ -78,38 +79,50 @@ function MarketDataView({ type, title, icon }) {
             </div>
 
             <div className="market-history">
-                <h3>Historical Data (Yearly)</h3>
-                <div className="table-wrapper">
-                    <table className="market-table">
-                        <thead>
-                            <tr>
-                                <th>Year</th>
-                                <th>{isDebt ? 'Total Debt' : 'Price (USD)'}</th>
-                                <th>Change</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {data.history.map((record, index) => {
-                                const price = record.amount || record.price;
-                                const prevPrice = data.history[index + 1] ? (data.history[index + 1].amount || data.history[index + 1].price) : price;
-                                const change = price - prevPrice;
-                                const changePercent = (change / prevPrice) * 100;
+                <button
+                    type="button"
+                    className="market-history-toggle"
+                    onClick={() => setTableMinimized(!tableMinimized)}
+                    aria-expanded={!tableMinimized}
+                >
+                    <h3>Historical Data (Yearly)</h3>
+                    <span className="toggle-icon" aria-hidden="true">
+                        {tableMinimized ? '▼ Expand' : '▲ Minimize'}
+                    </span>
+                </button>
+                {!tableMinimized && (
+                    <div className="table-wrapper">
+                        <table className="market-table">
+                            <thead>
+                                <tr>
+                                    <th>Year</th>
+                                    <th>{isDebt ? 'Total Debt' : 'Price (USD)'}</th>
+                                    <th>Change</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {data.history.map((record, index) => {
+                                    const price = record.amount || record.price;
+                                    const prevPrice = data.history[index + 1] ? (data.history[index + 1].amount || data.history[index + 1].price) : price;
+                                    const change = price - prevPrice;
+                                    const changePercent = (change / prevPrice) * 100;
 
-                                return (
-                                    <tr key={index}>
-                                        <td>{new Date(record.date).getFullYear()}</td>
-                                        <td className="price-cell">
-                                            {isDebt ? formatCurrency(price) : formatCurrency(price)}
-                                        </td>
-                                        <td className={`change-cell ${change > 0 ? 'positive' : change < 0 ? 'negative' : 'neutral'}`}>
-                                            {change > 0 ? '⬆' : change < 0 ? '⬇' : '−'} {Math.abs(changePercent).toFixed(2)}%
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                </div>
+                                    return (
+                                        <tr key={index}>
+                                            <td>{new Date(record.date).getFullYear()}</td>
+                                            <td className="price-cell">
+                                                {isDebt ? formatCurrency(price) : formatCurrency(price)}
+                                            </td>
+                                            <td className={`change-cell ${change > 0 ? 'positive' : change < 0 ? 'negative' : 'neutral'}`}>
+                                                {change > 0 ? '⬆' : change < 0 ? '⬇' : '−'} {Math.abs(changePercent).toFixed(2)}%
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
             </div>
         </div>
     );

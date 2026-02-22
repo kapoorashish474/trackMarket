@@ -23,12 +23,6 @@ function App() {
           title="Silver Price (USD/oz)"
           icon="🥈"
         />;
-      case 'debt':
-        return <MarketDataView
-          type="debt"
-          title="US National Debt"
-          icon="📉"
-        />;
       default:
         return <Timeline13F />;
     }
@@ -60,12 +54,6 @@ function App() {
             onClick={() => setActiveTab('silver')}
           >
             🥈 Silver
-          </button>
-          <button
-            className={`tab ${activeTab === 'debt' ? 'active' : ''}`}
-            onClick={() => setActiveTab('debt')}
-          >
-            📉 US Debt
           </button>
         </div>
 

@@ -13,12 +13,15 @@ function Timeline13F() {
   const [selectedFiling, setSelectedFiling] = useState(null);
   const [holdings, setHoldings] = useState(null);
   const [holdingsLoading, setHoldingsLoading] = useState(false);
+  const [filingsWithNoHoldings, setFilingsWithNoHoldings] = useState(new Set());
+  const [returnData, setReturnData] = useState(null);
+  const [returnLoading, setReturnLoading] = useState(false);
 
-  // Generate list of years (current year and 10 years back)
+  // Generate list of years (current year and 5 years back)
   const getYearOptions = () => {
     const currentYear = new Date().getFullYear();
     const years = [];
-    for (let i = 0; i <= 10; i++) {
+    for (let i = 0; i <= 4; i++) {
       years.push(currentYear - i);
     }
     return years;
@@ -28,6 +31,18 @@ function Timeline13F() {
     setSelectedQuarter('all');
     fetch13FData();
   }, [selectedEntity, selectedYear]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setReturnLoading(true);
+    setReturnData(null);
+    fetch(`/api/13f/${selectedEntity}/return`)
+      .then(res => res.json())
+      .then(d => { if (!cancelled) setReturnData(d); })
+      .catch(() => { if (!cancelled) setReturnData({ error: 'Unavailable' }); })
+      .finally(() => { if (!cancelled) setReturnLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedEntity]);
 
   const fetch13FData = useCallback(async () => {
     try {
@@ -109,11 +124,34 @@ function Timeline13F() {
       // Always set holdings
       setHoldings(holdingsData);
 
+      // Check if holdings data is not available (error or empty with note about unavailability)
       if (holdingsData.error && !holdingsData.holdings?.length) {
         console.warn('Holdings data contains error:', holdingsData.error);
+        // Mark this filing as having no holdings
+        setFilingsWithNoHoldings(prev => new Set(prev).add(filing.accessionNumber));
+      } else if (!holdingsData.holdings?.length) {
+        // Check if it's an error case (note about unavailable data) vs valid empty holdings
+        // If there's a note about data not being available, or if HoldingsTable would show error
+        if (holdingsData.note && (
+          holdingsData.note.includes('not available') || 
+          holdingsData.note.includes('could not be accessed') ||
+          holdingsData.note.includes('unavailable')
+        )) {
+          setFilingsWithNoHoldings(prev => new Set(prev).add(filing.accessionNumber));
+        } else if (!holdingsData.totalValue && !holdingsData.note) {
+          // Empty holdings with no total value and no note likely means data unavailable
+          // (HoldingsTable will show the error message in this case)
+          setFilingsWithNoHoldings(prev => new Set(prev).add(filing.accessionNumber));
+        }
       } else {
         console.log('✅ Holdings loaded successfully:', holdingsData.holdings?.length || 0, 'items');
         console.log('Total value:', holdingsData.totalValue);
+        // Remove from no-holdings set if it was previously marked
+        setFilingsWithNoHoldings(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(filing.accessionNumber);
+          return newSet;
+        });
       }
     } catch (err) {
       console.error('Exception fetching holdings:', err);
@@ -127,6 +165,8 @@ function Timeline13F() {
         investmentPercentage: 0,
         error: err.message
       });
+      // Mark this filing as having no holdings
+      setFilingsWithNoHoldings(prev => new Set(prev).add(filing.accessionNumber));
     } finally {
       console.log('Setting loading to false');
       setHoldingsLoading(false);
@@ -159,14 +199,10 @@ function Timeline13F() {
             className="control-select"
           >
             <option value="berkshire">Berkshire Hathaway (Warren Buffett)</option>
-            <option value="scion">Scion Asset Management</option>
-            <option value="bridgewater">Bridgewater Associates (Ray Dalio)</option>
+            <option value="dalalstreet">Dalal Street LLC (Mohnish Pabrai)</option>
             <option value="pershing">Pershing Square (Bill Ackman)</option>
-
-            <option value="baupost">Baupost Group (Seth Klarman)</option>
-            <option value="valueact">ValueAct Capital</option>
-            <option value="appaloosa">Appaloosa Management (David Tepper)</option>
-            <option value="duquesne">Duquesne Family Office (Stanley Druckenmiller)</option>
+            <option value="duquesne">Duquesne Family Office LLC (Stanley Druckenmiller)</option>
+            <option value="cantorfitzgerald">Cantor Fitzgerald, L.P. (Howard Lutnick)</option>
           </select>
         </div>
 
@@ -205,6 +241,30 @@ function Timeline13F() {
         </button>
       </div>
 
+      {!loading && !error && (
+        <div className="data-availability-info" style={{
+          padding: '12px 20px',
+          background: '#e3f2fd',
+          border: '1px solid #2196f3',
+          borderRadius: '8px',
+          marginBottom: '20px',
+          fontSize: '0.85rem',
+          color: '#1565c0'
+        }}>
+          <strong>ℹ️ Data Availability:</strong> The SEC API only returns filings from the last 2-3 years. 
+          For older quarters or missing data, visit{' '}
+          <a 
+            href={`https://www.sec.gov/cgi-bin/browse-edgar?CIK=${data?.cik || ''}&type=13F-HR`} 
+            target="_blank" 
+            rel="noopener noreferrer"
+            style={{color: '#1976d2', textDecoration: 'underline'}}
+          >
+            SEC EDGAR
+          </a>
+          {' '}directly.
+        </div>
+      )}
+
       {loading && (
         <div className="loading-container">
           <p>Loading 13F timeline data for {selectedYear}...</p>
@@ -224,12 +284,44 @@ function Timeline13F() {
           <div className="left-column">
             <div className="timeline-content">
               <h2 className="entity-title">{data.companyName}</h2>
+              <div className="return-summary">
+                {returnLoading ? (
+                  <span className="return-label">Last year return: …</span>
+                ) : returnData && typeof returnData.returnPercent === 'number' ? (
+                  <>
+                    <span className="return-label">Last year return (13F portfolio):</span>
+                    <span className={`return-value ${returnData.returnPercent >= 0 ? 'positive' : 'negative'}`}>
+                      {returnData.returnPercent >= 0 ? '+' : ''}{returnData.returnPercent.toFixed(2)}%
+                    </span>
+                    <span className="return-dates">
+                      ({formatDate(returnData.priorReportDate)} → {formatDate(returnData.latestReportDate)})
+                    </span>
+                  </>
+                ) : (
+                  <span className="return-label">Last year return: N/A</span>
+                )}
+              </div>
+              {data.totalFilings === 0 && (
+                <div className="data-availability-notice" style={{
+                  padding: '15px',
+                  background: '#fff3cd',
+                  border: '1px solid #ffc107',
+                  borderRadius: '8px',
+                  marginBottom: '20px',
+                  fontSize: '0.9rem',
+                  color: '#856404'
+                }}>
+                  <strong>ℹ️ Note:</strong> No filings found for {selectedYear}. The SEC API only returns recent filings (typically last 2-3 years). 
+                  For historical data, visit <a href={`https://www.sec.gov/cgi-bin/browse-edgar?CIK=${data.cik}&type=13F-HR`} target="_blank" rel="noopener noreferrer" style={{color: '#667eea'}}>SEC EDGAR</a> directly.
+                </div>
+              )}
               <TimelineView
                 data={data}
                 selectedFiling={selectedFiling}
                 onFilingClick={fetchHoldings}
                 formatDate={formatDate}
                 selectedQuarter={selectedQuarter}
+                filingsWithNoHoldings={filingsWithNoHoldings}
               />
             </div>
           </div>

@@ -4,18 +4,56 @@ const holdingsParser = require('./holdingsParser');
 // CIK numbers for the entities
 const CIK_MAP = {
   'berkshire': { cik: '0001067983', name: 'Berkshire Hathaway Inc. (Warren Buffett)' },
-  'scion': { cik: '0001649339', name: 'Scion Asset Management (Michael Burry)' },
-  'bridgewater': { cik: '0001350694', name: 'Bridgewater Associates (Ray Dalio)' },
-  'pershing': { cik: '0001336528', name: 'Pershing Square Capital (Bill Ackman)' },
-
-  'baupost': { cik: '0001061768', name: 'Baupost Group (Seth Klarman)' },
-  'valueact': { cik: '0001079114', name: 'ValueAct Capital' },
-  'appaloosa': { cik: '0001656456', name: 'Appaloosa Management (David Tepper)' },
-  'duquesne': { cik: '0001536411', name: 'Duquesne Family Office (Stanley Druckenmiller)' }
+  'dalalstreet': { cik: '0001549575', name: 'Dalal Street LLC (Mohnish Pabrai)' },
+  'pershing': { cik: '0001336528', name: 'Pershing Square (Bill Ackman)' },
+  'duquesne': { cik: '0001536411', name: 'Duquesne Family Office LLC (Stanley Druckenmiller)' },
+  'cantorfitzgerald': { cik: '0001024896', name: 'Cantor Fitzgerald, L.P. (Howard Lutnick)' }
 };
 
 // SEC EDGAR API base URL
 const SEC_BASE_URL = 'https://data.sec.gov';
+
+/**
+ * Fetch 13F filings for a given CIK using company filings API (for historical data)
+ * @param {string} cik - Central Index Key (CIK) number
+ * @param {Date} startDate - Start date for search
+ * @param {Date} endDate - End date for search
+ * @returns {Promise<Array>} Array of 13F filing data
+ */
+async function fetchHistoricalFilings(cik, startDate, endDate) {
+  try {
+    const headers = {
+      'User-Agent': 'TrackMarket App contact@example.com',
+      'Accept': 'application/json',
+      'Accept-Encoding': 'gzip, deflate',
+      'Host': 'data.sec.gov'
+    };
+
+    // Format dates for SEC API (YYYY-MM-DD)
+    const startDateStr = startDate.toISOString().split('T')[0];
+    const endDateStr = endDate.toISOString().split('T')[0];
+
+    // Use company filings API with date range
+    // Note: This endpoint may have rate limits and may not return all historical data
+    const filingsUrl = `${SEC_BASE_URL}/company/cik${cik}.json`;
+    
+    try {
+      const response = await axios.get(filingsUrl, { headers, timeout: 10000 });
+      // This endpoint structure may differ, so we'll fall back to submissions if needed
+      if (response.data && response.data.filings) {
+        // Process if structure matches
+        return [];
+      }
+    } catch (err) {
+      console.log(`Company filings API not available, using submissions API: ${err.message}`);
+    }
+
+    return [];
+  } catch (error) {
+    console.error(`Error fetching historical filings: ${error.message}`);
+    return [];
+  }
+}
 
 /**
  * Fetch 13F filings for a given CIK
@@ -37,7 +75,7 @@ async function fetch13FFilings(cik, year = null) {
       endDate = new Date(currentYear, 11, 31, 23, 59, 59);
     }
 
-    // SEC EDGAR submissions endpoint
+    // SEC EDGAR submissions endpoint (only returns recent filings, typically last 2-3 years)
     const submissionsUrl = `${SEC_BASE_URL}/submissions/CIK${cik}.json`;
 
     // Set headers required by SEC (they require a User-Agent)
@@ -52,6 +90,7 @@ async function fetch13FFilings(cik, year = null) {
     const submissions = response.data;
 
     if (!submissions || !submissions.filings || !submissions.filings.recent) {
+      console.warn(`No recent filings found for CIK ${cik}. The SEC submissions API only returns recent filings (typically last 2-3 years).`);
       return [];
     }
 
@@ -60,32 +99,50 @@ async function fetch13FFilings(cik, year = null) {
     const formTypes = filings.form;
     const filingDates = filings.filingDate;
     const reportDates = filings.reportDate;
+    const accessionNumbers = filings.accessionNumber;
 
-    // Filter for 13F-HR and 13F-HR/A forms
+    // Filter for 13F-HR and 13F-HR/A forms only (exclude other 13F types for accuracy)
     for (let i = 0; i < formTypes.length; i++) {
       if (formTypes[i] === '13F-HR' || formTypes[i] === '13F-HR/A') {
         const filingDate = new Date(filingDates[i]);
-        const reportDate = reportDates[i] ? new Date(reportDates[i]) : filingDate;
+        const reportDateStr = reportDates[i] || filingDates[i];
 
         // Check if within date range
         if (filingDate >= startDate && filingDate <= endDate) {
-          // Keep accession number as-is (may have dashes or not)
-          const accessionNo = filings.accessionNumber[i];
+          const accessionNo = accessionNumbers[i];
           form13F.push({
             formType: formTypes[i],
             filingDate: filingDates[i],
-            reportDate: reportDates[i] || filingDates[i],
+            reportDate: reportDateStr,
             accessionNumber: accessionNo,
             cik: cik,
             companyName: submissions.name || 'Unknown',
-            hasHoldings: true // Flag to indicate we can fetch holdings
+            hasHoldings: true
           });
         }
       }
     }
 
-    // Sort by filing date (most recent first)
-    form13F.sort((a, b) => new Date(b.filingDate) - new Date(a.filingDate));
+    // Deduplicate by report period: for each (year, quarter) keep only the latest filing (amendments supersede originals)
+    const byReportPeriod = {};
+    form13F.forEach(f => {
+      const reportDate = new Date(f.reportDate);
+      const reportYear = reportDate.getFullYear();
+      const reportQ = getQuarter(f.reportDate);
+      const key = `${reportYear}-${reportQ}`;
+      if (!byReportPeriod[key] || new Date(f.filingDate) > new Date(byReportPeriod[key].filingDate)) {
+        byReportPeriod[key] = f;
+      }
+    });
+
+    // Replace with deduped list, sorted by filing date (most recent first)
+    form13F.length = 0;
+    form13F.push(...Object.values(byReportPeriod).sort((a, b) => new Date(b.filingDate) - new Date(a.filingDate)));
+
+    // Log warning if year requested is old and no filings found
+    if (year && form13F.length === 0 && year < new Date().getFullYear() - 2) {
+      console.warn(`No filings found for year ${year}. The SEC submissions API only returns recent filings. For historical data, you may need to use the SEC EDGAR search directly.`);
+    }
 
     return form13F;
   } catch (error) {
@@ -174,14 +231,9 @@ function getQuarter(dateString) {
  */
 async function getAll13FData(year = null) {
   try {
-    const [berkshireData, scionData] = await Promise.all([
-      get13FTimeline('berkshire', year),
-      get13FTimeline('scion', year)
-    ]);
-
+    const berkshireData = await get13FTimeline('berkshire', year);
     return {
       berkshire: berkshireData,
-      scion: scionData,
       generatedAt: new Date().toISOString()
     };
   } catch (error) {
@@ -190,10 +242,97 @@ async function getAll13FData(year = null) {
   }
 }
 
+/**
+ * Get last-year rate of return for an entity based on 13F reported portfolio values.
+ * Compares same quarter year-over-year (e.g. Q4 2024 vs Q4 2023) so the return is comparable.
+ * This is the change in reported portfolio value, not actual fund performance.
+ * @param {string} entityKey - entity key from CIK_MAP (e.g. 'berkshire', 'dalalstreet', 'pershing')
+ * @returns {Promise<Object>} { latestValue, priorValue, returnPercent, latestReportDate, priorReportDate, error? }
+ */
+async function get13FYearOverYearReturn(entityKey) {
+  const entity = CIK_MAP[entityKey.toLowerCase()];
+  if (!entity) {
+    return { error: `Unknown entity: ${entityKey}` };
+  }
+
+  const cik = entity.cik;
+  const currentYear = new Date().getFullYear();
+
+  try {
+    const [filingsCurrent, filingsPriorYear] = await Promise.all([
+      fetch13FFilings(cik, currentYear),
+      fetch13FFilings(cik, currentYear - 1)
+    ]);
+
+    const allFilings = [...filingsCurrent, ...filingsPriorYear].sort(
+      (a, b) => new Date(b.reportDate) - new Date(a.reportDate)
+    );
+
+    if (allFilings.length === 0) {
+      return { error: 'No 13F filings found' };
+    }
+
+    const latestFiling = allFilings[0];
+    const latestReportDate = new Date(latestFiling.reportDate);
+    const latestYear = latestReportDate.getFullYear();
+    const latestQ = getQuarter(latestFiling.reportDate);
+    const priorYear = latestYear - 1;
+
+    // Prior = same quarter, one year earlier (e.g. Q4 2024 → Q4 2023)
+    const priorFiling = allFilings.find((f) => {
+      const d = new Date(f.reportDate);
+      return d.getFullYear() === priorYear && getQuarter(f.reportDate) === latestQ;
+    });
+
+    if (!priorFiling) {
+      return {
+        error: 'Not enough history for 1-year return (same quarter prior year not found)',
+        latestReportDate: latestFiling.reportDate,
+        latestValue: null
+      };
+    }
+
+    const [latestHoldings, priorHoldings] = await Promise.all([
+      holdingsParser.fetch13FHoldings(latestFiling.accessionNumber, cik),
+      holdingsParser.fetch13FHoldings(priorFiling.accessionNumber, cik)
+    ]);
+
+    const latestValue = latestHoldings.totalValue || 0;
+    const priorValue = priorHoldings.totalValue || 0;
+
+    if (priorValue <= 0) {
+      return {
+        error: 'Prior period portfolio value not available',
+        latestReportDate: latestFiling.reportDate,
+        priorReportDate: priorFiling.reportDate,
+        latestValue,
+        priorValue: 0
+      };
+    }
+
+    const returnPercent = ((latestValue - priorValue) / priorValue) * 100;
+
+    return {
+      latestValue,
+      priorValue,
+      returnPercent,
+      latestReportDate: latestFiling.reportDate,
+      priorReportDate: priorFiling.reportDate,
+      companyName: entity.name
+    };
+  } catch (err) {
+    console.error(`Error computing YoY return for ${entityKey}:`, err);
+    return {
+      error: err.message || 'Failed to compute year-over-year return'
+    };
+  }
+}
+
 module.exports = {
   get13FTimeline,
   getAll13FData,
   fetch13FFilings,
+  get13FYearOverYearReturn,
   CIK_MAP,
   getEntityName: (entityKey) => {
     const entity = CIK_MAP[entityKey.toLowerCase()];
